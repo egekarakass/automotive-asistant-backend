@@ -1,0 +1,25 @@
+# Secrets & keys
+.env
+.env.*
+*.pem
+*.key
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Local data (hesaplar, konuşmalar, yüklenen dosyalar)
+*.db
+*.sqlite3
+downloads/
+temp_*
+
+# Logs
+*.log
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+*.sqlite
