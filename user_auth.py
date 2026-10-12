@@ -6,7 +6,9 @@ from datetime import datetime, timedelta
 from fastapi import HTTPException, Header
 from dotenv import load_dotenv
 from database import DB_NAME
+import hmac
 
+BOT_API_SECRET = os.getenv("BOT_API_SECRET", "")
 load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 
 JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY")
@@ -68,3 +70,19 @@ def verify_user_token(authorization: str = Header(None)):
         raise HTTPException(status_code=401, detail="Oturum süresi doldu, tekrar giriş yapın")
     except jwt.InvalidTokenError:
         raise HTTPException(status_code=401, detail="Geçersiz token")
+
+def verify_user_or_bot(
+    authorization: str = Header(None),
+    x_bot_secret: str = Header(None),
+    x_telegram_user_id: str = Header(None),
+):
+    if x_bot_secret:
+        if not BOT_API_SECRET or not hmac.compare_digest(x_bot_secret, BOT_API_SECRET):
+            raise HTTPException(status_code=403, detail="Geçersiz bot anahtarı")
+        if not x_telegram_user_id or not x_telegram_user_id.isdigit():
+            raise HTTPException(status_code=400, detail="Telegram kullanıcı kimliği eksik")
+        return {
+            "user_id": -int(x_telegram_user_id),
+            "username": f"telegram:{x_telegram_user_id}",
+        }
+    return verify_user_token(authorization)

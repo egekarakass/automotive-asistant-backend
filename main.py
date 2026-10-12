@@ -20,18 +20,28 @@ database.initialize_database()
 TELEGRAM_MESSAGE_LIMIT = 4096
 
 API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8000")
+BOT_API_SECRET = os.getenv("BOT_API_SECRET", "")
 
-def _call_api(endpoint, timeout=120, **kwargs):
+
+def _call_api(endpoint, user_id, timeout=120, **kwargs):
     """API'ye istek atar, hata durumunda None döner — çağıran taraf
     kullanıcıya nazik bir hata mesajı gösterebilsin diye, bot'u
-    çökertmez."""
+    çökertmez. Bot, API'ye paylaşılan gizli anahtar ve Telegram
+    kullanıcı kimliği başlıklarıyla kimlik doğrular."""
+    headers = {
+        "X-Bot-Secret": BOT_API_SECRET,
+        "X-Telegram-User-Id": str(user_id),
+    }
     try:
-        response = requests.post(f"{API_BASE_URL}{endpoint}", timeout=timeout, **kwargs)
+        response = requests.post(
+            f"{API_BASE_URL}{endpoint}", headers=headers, timeout=timeout, **kwargs
+        )
         response.raise_for_status()
         return response.json()
     except requests.exceptions.RequestException as e:
         print(f"[API CALL FAILED] {endpoint}: {e}")
         return None
+
 
 def send_long_message(chat_id, text, reply_to_message_id=None):
     """
@@ -79,6 +89,7 @@ def _get_or_create_session(user_id):
         database.set_active_session(user_id, session_id)
     return session_id
 
+
 def _get_display_name(user):
     """
     Telegram's `username` field (the public @handle) is often unset, since
@@ -95,6 +106,7 @@ def _get_display_name(user):
         return f"@{user.username}"
     return "Unknown"
 
+
 @bot.message_handler(func=lambda message: True)
 def handle_all_messages(message):
     print(f"[DEBUG] Handler triggered for message_id={message.message_id}, text={message.text}")
@@ -104,14 +116,15 @@ def handle_all_messages(message):
 
     bot.send_chat_action(message.chat.id, 'typing')
 
-    response = requests.post(
-        f"{API_BASE_URL}/ask",
+    ai_result = _call_api(
+        "/ask", user_id,
         json={"message": user_question, "session_id": session_id},
-        timeout=120
+        timeout=120,
     )
-    response.raise_for_status()
-    ai_result = response.json()
-    bot_response = ai_result["response"]
+    bot_response = (
+        ai_result["response"] if ai_result
+        else "Üzgünüm, sunucuya ulaşamadım. Lütfen tekrar deneyin."
+    )
 
     send_long_message(message.chat.id, bot_response, reply_to_message_id=message.message_id)
     # NOT: database.log_message artık burada ÇAĞRILMIYOR —
@@ -132,10 +145,12 @@ def handle_photo_message(message):
 
     files = {"image": (f"{message.message_id}.jpg", downloaded_file)}
     data = {"caption": caption, "session_id": session_id}
-    response = requests.post(f"{API_BASE_URL}/ask_vision", files=files, data=data, timeout=120)
-    response.raise_for_status()
-    ai_result = response.json()
-    bot_response = ai_result["response"]
+
+    ai_result = _call_api("/ask_vision", user_id, files=files, data=data, timeout=180)
+    bot_response = (
+        ai_result["response"] if ai_result
+        else "Üzgünüm, fotoğrafı işlerken sunucuya ulaşamadım. Lütfen tekrar deneyin."
+    )
 
     send_long_message(message.chat.id, bot_response, reply_to_message_id=message.message_id)
 
@@ -152,13 +167,16 @@ def handle_voice_message(message):
 
     files = {"audio": (f"{message.message_id}.ogg", downloaded_file)}
     data = {"session_id": session_id}
-    response = requests.post(f"{API_BASE_URL}/ask_voice", files=files, data=data, timeout=120)
-    response.raise_for_status()
-    ai_result = _call_api("/ask_voice", files=files, data=data, timeout=300)
-    bot_response = ai_result[
-        "response"] if ai_result else "Üzgünüm, sesli mesajı işlerken sunucuya ulaşamadım. Lütfen tekrar deneyin."
+
+    ai_result = _call_api("/ask_voice", user_id, files=files, data=data, timeout=300)
+    bot_response = (
+        ai_result["response"] if ai_result
+        else "Üzgünüm, sesli mesajı işlerken sunucuya ulaşamadım. Lütfen tekrar deneyin."
+    )
+
     send_long_message(message.chat.id, bot_response, reply_to_message_id=message.message_id)
 
-print("Automotive Bot is successfully running and listening for messages...")
+
 if __name__ == "__main__":
+    print("Automotive Bot is successfully running and listening for messages...")
     bot.infinity_polling()

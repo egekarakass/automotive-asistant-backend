@@ -11,7 +11,7 @@ from stt import transcribe_audio
 from fastapi import Depends
 from pydantic import BaseModel
 from auth import authenticate, verify_token
-from user_auth import register_user, authenticate_user, verify_user_token
+from user_auth import register_user, authenticate_user, verify_user_token, verify_user_or_bot
 from evaluator import run_evaluation_batch
 import os
 from dotenv import load_dotenv
@@ -47,7 +47,7 @@ class TextRequest(BaseModel):
     session_id: str | None = None
 
 @app.post("/ask")
-def ask(request: TextRequest, current_user: dict = Depends(verify_user_token)):
+def ask(request: TextRequest, current_user: dict = Depends(verify_user_or_bot)):
     session_id = request.session_id or "http_api_unknown"
     owner_id = database.claim_session(session_id, current_user["user_id"], title=request.message[:50])
     if owner_id != current_user["user_id"]:
@@ -75,7 +75,7 @@ async def ask_vision(
     image: UploadFile = File(...),
     caption: str = Form(""),
     session_id: str = Form(None),
-    current_user: dict = Depends(verify_user_token)
+    current_user: dict = Depends(verify_user_or_bot)
 ):
     session_id = session_id or "http_api_unknown"
     owner_id = database.claim_session(session_id, current_user["user_id"], title=caption[:50] or "Görsel sohbet")
@@ -112,7 +112,7 @@ async def ask_vision(
 async def ask_voice(
     audio: UploadFile = File(...),
     session_id: str = Form(None),
-    current_user: dict = Depends(verify_user_token)
+    current_user: dict = Depends(verify_user_or_bot)
 ):
     session_id = session_id or "http_api_unknown"
     owner_id = database.claim_session(session_id, current_user["user_id"], title="Sesli sohbet")
