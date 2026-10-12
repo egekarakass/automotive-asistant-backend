@@ -160,4 +160,5 @@ def handle_voice_message(message):
     send_long_message(message.chat.id, bot_response, reply_to_message_id=message.message_id)
 
 print("Automotive Bot is successfully running and listening for messages...")
-bot.infinity_polling()
+if __name__ == "__main__":
+    bot.infinity_polling()
