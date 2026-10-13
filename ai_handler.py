@@ -433,8 +433,8 @@ def _normalize_vat_terminology(text, detected_lang):
 _UNREQUESTED_FUEL_CATEGORIES = [
 
     (("gazyağı", "kerosen", "kerosene"), ("gazyağı", "kerosen", "kerosene")),
-    (("kalorifer", "heating oil"), ("kalorifer yakıtı", "kalorifer", "heating oil")),
-    (("fuel oil",), ("fuel oil",)),
+    (("kalorifer", "heating oil", "ısıtma", "isıtma", "isitma"),("kalorifer yakıtı", "kalorifer", "heating oil", "ısıtma", "isıtma", "isitma")),
+    (("fuel oil",), ("fuel oil",))
 ]
 
 def _strip_unrequested_fuel_mentions(text, user_message):
