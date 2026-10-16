@@ -1,6 +1,8 @@
 import os
 import shutil
-from fastapi import FastAPI, UploadFile, File, Form
+import threading
+import time
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Depends
 from pydantic import BaseModel
 import ai_handler
 import database
@@ -8,12 +10,9 @@ import sqlite3
 import uvicorn
 from fastapi.middleware.cors import CORSMiddleware
 from stt import transcribe_audio
-from fastapi import Depends
-from pydantic import BaseModel
 from auth import authenticate, verify_token
 from user_auth import register_user, authenticate_user, verify_user_token, verify_user_or_bot
 from evaluator import run_evaluation_batch
-import os
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -33,6 +32,21 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+EVAL_INTERVAL_SECONDS = 900  # 15 dakikada bir
+EVAL_BATCH_SIZE = 5  # her turda en fazla 5 mesaj
+
+
+def _evaluation_loop():
+    time.sleep(120)  # açılışta whisper yüklenirken bekle
+    while True:
+        try:
+            run_evaluation_batch(limit=EVAL_BATCH_SIZE)
+        except Exception as e:
+            print(f"[EVAL LOOP] error: {e}")
+        time.sleep(EVAL_INTERVAL_SECONDS)
+
+
 @app.on_event("startup")
 def preload_models():
     database.initialize_database()
@@ -41,10 +55,15 @@ def preload_models():
     _get_whisper_model()
     print("Ses tanıma modeli hazır.")
 
+    # Arka plan değerlendirme döngüsünü başlat
+    threading.Thread(target=_evaluation_loop, daemon=True).start()
+
+
 # Metin istekleri için JSON şeması
 class TextRequest(BaseModel):
     message: str
     session_id: str | None = None
+
 
 @app.post("/ask")
 def ask(request: TextRequest, current_user: dict = Depends(verify_user_or_bot)):
@@ -72,10 +91,10 @@ def ask(request: TextRequest, current_user: dict = Depends(verify_user_or_bot)):
 
 @app.post("/ask_vision")
 async def ask_vision(
-    image: UploadFile = File(...),
-    caption: str = Form(""),
-    session_id: str = Form(None),
-    current_user: dict = Depends(verify_user_or_bot)
+        image: UploadFile = File(...),
+        caption: str = Form(""),
+        session_id: str = Form(None),
+        current_user: dict = Depends(verify_user_or_bot)
 ):
     session_id = session_id or "http_api_unknown"
     owner_id = database.claim_session(session_id, current_user["user_id"], title=caption[:50] or "Görsel sohbet")
@@ -108,11 +127,12 @@ async def ask_vision(
         if os.path.exists(temp_file_path):
             os.remove(temp_file_path)
 
+
 @app.post("/ask_voice")
 async def ask_voice(
-    audio: UploadFile = File(...),
-    session_id: str = Form(None),
-    current_user: dict = Depends(verify_user_or_bot)
+        audio: UploadFile = File(...),
+        session_id: str = Form(None),
+        current_user: dict = Depends(verify_user_or_bot)
 ):
     session_id = session_id or "http_api_unknown"
     owner_id = database.claim_session(session_id, current_user["user_id"], title="Sesli sohbet")
@@ -156,7 +176,6 @@ async def ask_voice(
             os.remove(temp_file_path)
 
 
-
 class LoginRequest(BaseModel):
     username: str
     password: str
@@ -166,6 +185,7 @@ class LoginRequest(BaseModel):
 def my_sessions(current_user: dict = Depends(verify_user_token)):
     return database.get_user_sessions(current_user["user_id"])
 
+
 @app.get("/my_sessions/{session_id}")
 def my_session_detail(session_id: str, current_user: dict = Depends(verify_user_token)):
     owner_id = database.get_session_owner(session_id)
@@ -173,16 +193,20 @@ def my_session_detail(session_id: str, current_user: dict = Depends(verify_user_
         raise HTTPException(status_code=403, detail="Bu sohbete erişim izniniz yok")
     history = database.get_messages_since(session_id, offset=0)
     return {"session_id": session_id, "messages": history}
+
+
 @app.post("/admin/login")
 def login(request: LoginRequest):
     token = authenticate(request.username, request.password)
     return {"access_token": token, "token_type": "bearer"}
+
 
 class ManualEvaluation(BaseModel):
     message_id: int
     correct_tool_called: bool
     answer_correct: bool
     notes: str | None = None
+
 
 @app.post("/admin/evaluations/override")
 def override_evaluation(body: ManualEvaluation, admin_user: str = Depends(verify_token)):
@@ -194,6 +218,7 @@ def override_evaluation(body: ManualEvaluation, admin_user: str = Depends(verify
         raise HTTPException(status_code=404, detail="Mesaj bulunamadı")
     return {"status": "saved"}
 
+
 @app.post("/admin/run_evaluation")
 async def trigger_evaluation(limit: int = 50, admin_user: str = Depends(verify_token)):
     success_count, total = run_evaluation_batch(limit=limit)
@@ -203,26 +228,28 @@ async def trigger_evaluation(limit: int = 50, admin_user: str = Depends(verify_t
         "total_attempted": total
     }
 
+
 @app.get("/admin/sessions")
 def list_sessions(limit: int = 50, admin_user: str = Depends(verify_token)):
     conn = sqlite3.connect(database.DB_NAME)
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
     cursor.execute("""
-        SELECT session_id,
-               COUNT(*) as message_count,
-               MAX(timestamp) as last_activity,
-               MIN(timestamp) as started_at,
-               MAX(username) as username,
-               MAX(language) as language
-        FROM messages
-        GROUP BY session_id
-        ORDER BY last_activity DESC
-        LIMIT ?
-    """, (limit,))
+                   SELECT session_id,
+                          COUNT(*)       as message_count,
+                          MAX(timestamp) as last_activity,
+                          MIN(timestamp) as started_at,
+                          MAX(username)  as username,
+                          MAX(language) as language
+                   FROM messages
+                   GROUP BY session_id
+                   ORDER BY last_activity DESC
+                       LIMIT ?
+                   """, (limit,))
     rows = [dict(r) for r in cursor.fetchall()]
     conn.close()
     return rows
+
 
 @app.get("/admin/sessions/{session_id}")
 def get_session_detail(session_id: str, admin_user: str = Depends(verify_token)):
@@ -231,20 +258,27 @@ def get_session_detail(session_id: str, admin_user: str = Depends(verify_token))
     cursor = conn.cursor()
 
     cursor.execute("""
-        SELECT id, question, answer, tool_used, model_used, has_image, timestamp
-        FROM messages WHERE session_id = ? ORDER BY timestamp ASC
-    """, (session_id,))
+                   SELECT id, question, answer, tool_used, model_used, has_image, timestamp
+                   FROM messages
+                   WHERE session_id = ?
+                   ORDER BY timestamp ASC
+                   """, (session_id,))
     messages = [dict(r) for r in cursor.fetchall()]
 
     cursor.execute("""
-        SELECT api_name, request_endpoint, response_data, timestamp
-        FROM api_logs WHERE session_id = ? ORDER BY timestamp ASC
-    """, (session_id,))
+                   SELECT api_name, request_endpoint, response_data, timestamp
+                   FROM api_logs
+                   WHERE session_id = ?
+                   ORDER BY timestamp ASC
+                   """, (session_id,))
     tool_calls = [dict(r) for r in cursor.fetchall()]
 
     cursor.execute("""
-        SELECT * FROM evaluations WHERE session_id = ? ORDER BY timestamp ASC
-    """, (session_id,))
+                   SELECT *
+                   FROM evaluations
+                   WHERE session_id = ?
+                   ORDER BY timestamp ASC
+                   """, (session_id,))
     evaluations = [dict(r) for r in cursor.fetchall()]
 
     cursor.execute("SELECT summary FROM session_summaries WHERE session_id = ?", (session_id,))
@@ -297,19 +331,23 @@ def get_stats(admin_user: str = Depends(verify_token)):
         "evaluation_summary": eval_summary
     }
 
+
 class AuthRequest(BaseModel):
     username: str
     password: str
+
 
 @app.post("/register")
 def register(request: AuthRequest):
     token = register_user(request.username, request.password)
     return {"access_token": token, "token_type": "bearer"}
 
+
 @app.post("/login")
 def user_login(request: AuthRequest):
     token = authenticate_user(request.username, request.password)
     return {"access_token": token, "token_type": "bearer"}
+
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
