@@ -2,8 +2,8 @@ import json
 from database import DB_NAME, log_evaluation, get_unevaluated_messages
 from ai_handler import client
 
-JUDGE_MODEL = "nvidia/nemotron-3-super-120b-a12b:free"
-JUDGE_FALLBACK_MODEL = "deepseek/deepseek-v4-flash-0731:free"
+JUDGE_MODEL = "nvidia/nemotron-3-ultra-550b-a55b:free"
+JUDGE_FALLBACK_MODEL = "cohere/north-mini-code:free"
 
 JUDGE_SYSTEM_PROMPT = """You are a QA evaluator for an automotive assistant bot.
 Given a user question, the tool the bot actually called, and the bot's answer,
