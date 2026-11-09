@@ -440,39 +440,55 @@ _UNREQUESTED_FUEL_CATEGORIES = [
     (("fuel oil",), ("fuel oil",))
 ]
 
+_FUEL_SPLIT_RE = re.compile(r"(\s+-\s+|;\s*|,\s+|(?<!\d)\.\s+)")
+
+
 def _strip_unrequested_fuel_mentions(text, user_message):
     """
     Strips non-automotive fuel categories (kerosene, heating oil, fuel
     oil) from the answer unless the user specifically asked about that
-    category — these are industrial/heating products the tool returns
-    alongside vehicle fuels, but a generic "fuel prices" question should
-    only surface gasoline/diesel/LPG by default. Each category is
-    checked independently so asking about one doesn't accidentally
-    preserve the others.
+    category. Works on the smallest matching piece (list line, clause or
+    sentence) so that a one-line answer is never wiped out. If stripping
+    would leave an empty answer, the original text is returned instead.
     """
     if not text:
         return text
+    original = text
     lower_msg = user_message.lower()
-    boundary = r"(?:\n|\s-\s|(?<!\d)\.(?!\d)\s*|$)"
 
     for request_keywords, strip_keywords in _UNREQUESTED_FUEL_CATEGORIES:
         if any(kw in lower_msg for kw in request_keywords):
             continue
 
-        kw_pattern = "|".join(re.escape(k) for k in strip_keywords)
-        pattern = (
-                r"(?:^|\n|\s-\s)"  
-                r"[^\n]*?\b(?:" + kw_pattern + r")\b"
-                                               r"[^\n]*?"
-                                               r"(?=" + boundary + r")"
+        kw_re = re.compile(
+            r"\b(?:" + "|".join(re.escape(k) for k in strip_keywords) + r")\b",
+            re.IGNORECASE,
         )
-        text = re.sub(pattern, "", text, flags=re.IGNORECASE)
+        new_lines = []
+        for line in text.split("\n"):
+            if not kw_re.search(line):
+                new_lines.append(line)
+                continue
+            parts = _FUEL_SPLIT_RE.split(line)  # [parça, ayraç, parça, ...]
+            kept = ""
+            for i in range(0, len(parts), 2):
+                delim = parts[i + 1] if i + 1 < len(parts) else ""
+                if not kw_re.search(parts[i]):
+                    kept += parts[i] + delim
+            kept = re.sub(r"[,;\s-]+$", "", kept)
+            if kept and line.rstrip().endswith(".") and not kept.endswith("."):
+                kept += "."
+            new_lines.append(kept)
+        text = "\n".join(new_lines)
 
-    text = re.sub(r"\s{2,}", " ", text)
-    text = re.sub(r"\n\s*\n", "\n", text)
-    text = re.sub(r"^\s*-\s*", "", text)
-    text = re.sub(r"\s-\s*$", "", text)
-    return text.strip()
+    text = re.sub(r"[ \t]{2,}", " ", text)
+    text = re.sub(r"\n\s*\n+", "\n", text)
+    text = text.strip()
+
+    # Güvenlik ağı: filtre cevabı boşalttıysa orijinali döndür
+    if len(re.sub(r"[\W_]+", "", text)) < 3:
+        return original
+    return text
 
 def _trim_to_last_sentence(text, min_length=80):
     """
