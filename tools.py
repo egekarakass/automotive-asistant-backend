@@ -138,28 +138,47 @@ def _normalize_tr(text):
     return text.translate(_TR_CHAR_MAP).upper().strip()
 
 
-def get_fuel_prices(city="istanbul"):
-    """
-    Scrapes current fuel prices (gasoline, diesel, LPG, etc.) for a given
-    Turkish city from Petrol Ofisi's public price page. No API key needed.
-    """
-    def _clarify_fuel_field_names(data):
-        """
-        Renames ambiguous scraped field names to be self-explanatory by
-        embedding the Turkish colloquial term directly into the field name.
-        A prompt-level instruction alone wasn't reliably followed by weaker
-        models (they kept confusing "Gazyağı"/kerosene with "mazot"/diesel),
-        so this disambiguates at the data level instead — the model no longer
-        has to interpret which field means what, the label says it outright.
-        """
-        rename_map = {
-            "V/Max Diesel": "V/Max Diesel (motorin/mazot/dizel fiyatı BUDUR)",
-            "Gazyağı": "Gazyağı (kerosen - bu MOTORİN/MAZOT DEĞİLDİR, farklı bir üründür)",
-            "V/Max Kurşunsuz 95": "V/Max Kurşunsuz 95 (benzin fiyatı)",
-            "PO/gaz Otogaz": "PO/gaz Otogaz (LPG/otogaz fiyatı)",
-        }
-        return {rename_map.get(k, k): v for k, v in data.items()}
+# (anahtar kelimeler, Türkçe etiket, varsayılan olarak gösterilsin mi)
 
+_TR_FOLD = str.maketrans({
+    "İ": "i", "I": "i", "ı": "i",
+    "Ş": "s", "ş": "s", "Ğ": "g", "ğ": "g",
+    "Ü": "u", "ü": "u", "Ö": "o", "ö": "o",
+    "Ç": "c", "ç": "c",
+})
+
+FUEL_CATEGORIES = [
+    (("kursunsuz", "benzin"), "Benzin", True),
+    (("diesel", "motorin", "mazot"), "Motorin", True),
+    (("otogaz", "lpg"), "LPG", True),
+    (("gazyagi", "kerosen", "kerozin"), "Gazyağı (kerozin)", False),
+    (("kalorifer", "isitma"), "Kalorifer yakıtı", False),
+    (("fuel",), "Fuel oil", False),
+]
+
+
+def _label_fuel(header):
+    """Tablo başlığını Türkçe etikete çevirir. -> (etiket, varsayılan_gösterilsin_mi)"""
+    h = header.translate(_TR_FOLD).lower()
+    for keys, label, default in FUEL_CATEGORIES:
+        if any(k in h for k in keys):
+            if label == "Benzin":
+                m = re.search(r"\b(9\d)\b", h)
+                if m:
+                    label = f"Benzin ({m.group(1)} oktan)"
+            return label, default
+    return header, False  # tanınmayan ürün: sadece include_other_products=True ise
+
+def get_fuel_prices(city="istanbul", include_other_products=False):
+    """
+    Scrapes current fuel prices for a given Turkish city from Petrol Ofisi's
+    public price page. No API key needed.
+
+    By default only vehicle fuels (gasoline, diesel, LPG) are returned.
+    Kerosene, heating oil and fuel oil are returned only when
+    include_other_products is True, so the model never even sees them
+    for a generic "fuel prices" question.
+    """
     url = "https://www.petrolofisi.com.tr/akaryakit-fiyatlari"
     try:
         response = requests.get(
@@ -192,27 +211,31 @@ def get_fuel_prices(city="istanbul"):
             if normalized_target not in _normalize_tr(city_cell):
                 continue
 
-            row_data = {"city": city_cell}
+            row_data = {"sehir_bolge": city_cell}
             for header, cell in zip(headers[1:], cells[1:]):
-                cell_text = cell.get_text(" ", strip=True)
-                numbers = re.findall(r"\d+[.,]\d+", cell_text)
-                if numbers:
-                    row_data[header] = {
-                        "vat_included": numbers[0],
-                        "vat_excluded": numbers[1] if len(numbers) > 1 else None
-                    }
-                else:
-                    row_data[header] = cell_text
-
-
-            row_data = _clarify_fuel_field_names(row_data)
+                label, is_default = _label_fuel(header)
+                if not (is_default or include_other_products):
+                    continue
+                if label in row_data:  # aynı etikete düşen ikinci sütunu atla
+                    continue
+                numbers = re.findall(r"\d+[.,]\d+", cell.get_text(" ", strip=True))
+                if not numbers:
+                    continue
+                row_data[label] = f"{numbers[0].replace('.', ',')} TL/litre (KDV dahil)"
 
             matches.append(row_data)
 
         if not matches:
             return {"error": f"No prices found for '{city}'. Check the city name."}
 
-        return {"results": matches}
+        out = {"results": matches}
+        if len(matches) > 1:
+            out["note"] = (
+                "Birden fazla bölge döndü. Her bölgeyi 'sehir_bolge' alanındaki "
+                "adıyla (ör. İstanbul (Avrupa), İstanbul (Anadolu)) ayrı başlık "
+                "altında yaz. Bölge adını asla atlama, iki bölgeyi birleştirme."
+            )
+        return out
 
     except requests.exceptions.RequestException as e:
         return {"error": f"Could not fetch fuel prices page: {str(e)}"}
