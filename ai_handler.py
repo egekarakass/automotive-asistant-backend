@@ -1116,7 +1116,7 @@ _GREETING_ONLY_PATTERNS = {
     "iyi geceler", "hoşça kal", "görüşürüz", "teşekkürler", "teşekkür ederim",
     "sağol", "sağ ol", "tamam", "tamamdır", "evet", "hayır","kanka",
     "peki", "anladım", "harika", "süper", "güzel","dostum","canım","arkadaş",
-    "merhabalar","selamlar",
+    "merhabalar","selamlar","selamun aleyküm"
 
     # English equivalents
     "hello", "hi", "hey", "good morning", "good evening", "good night",
